@@ -18,11 +18,11 @@ export class OpenAIService {
    * @returns Array of relevant topics
    */
   async getRelevantTopics(paper: Paper, topics: string[]): Promise<string[]> {
-    console.log("Analyzing paper:", paper);
+    console.debug("Analyzing paper:", paper);
 
     const prompt = `
 Given a list of topics, identify which of them are related to this paper.
-Respond with an array in JSON format. If no paper info is given/no topics are related, return an empty array.
+Respond with an array in JSON format. If no paper info is given/no topics are related, only return an empty array and nothing else.
 
 Paper Title: ${paper.title}
 Paper Abstract: ${paper.abstract}
@@ -49,8 +49,8 @@ Response format example: ["${topics[0]}"]
     });
 
     try {
+      console.debug("Response:", response);
       const content = response.choices[0]?.message.content || "[]";
-      console.log("Response:", content);
       const parsedTopics = JSON.parse(content) as string[];
 
       // Validate that returned topics are from the original list
