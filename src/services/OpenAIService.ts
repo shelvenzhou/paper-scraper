@@ -1,5 +1,3 @@
-// src/services/OpenAIService.ts
-
 import OpenAI from "openai";
 import type { Paper } from "../types/types";
 
@@ -81,25 +79,33 @@ Response format example: ["${topics[0]}"]
    */
   async batchProcessPapers(
     papers: Paper[],
-    topics: string[]
+    topics: string[],
+    onPaperProcessed?: (paper: Paper, relevantTopics: string[]) => Promise<void>
   ): Promise<Map<Paper, string[]>> {
     const results = new Map<Paper, string[]>();
 
-    // Process papers in parallel with a concurrency limit
-    const concurrencyLimit = 1; // Adjust based on your needs
-    const chunks = this.chunkArray(papers, concurrencyLimit);
-
+    // Process papers in smaller batches
+    const batchSize = 3; // Adjust based on your needs
+    const chunks = this.chunkArray(papers, batchSize);
     for (const chunk of chunks) {
-      const promises = chunk.map((paper) =>
-        this.getRelevantTopics(paper, topics).then((relevantTopics) => {
+      const promises = chunk.map(async (paper) => {
+        try {
+          const relevantTopics = await this.getRelevantTopics(paper, topics);
           results.set(paper, relevantTopics);
-          console.log("", paper.title, "->", relevantTopics);
-        })
-      );
+
+          // Call callback after each paper is processed
+          if (onPaperProcessed) {
+            await onPaperProcessed(paper, relevantTopics);
+          }
+
+          console.log(`Processed paper: ${paper.title}`);
+        } catch (error) {
+          console.error(`Error processing paper ${paper.title}:`, error);
+        }
+      });
 
       await Promise.all(promises);
     }
-
     return results;
   }
 

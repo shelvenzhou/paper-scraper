@@ -1,15 +1,16 @@
-// src/services/CrawlerService.ts
-
 import axios from "axios";
 import type { Paper, TopicOutput } from "../types/types";
 import { ParserFactory } from "../parsers/ParserFactory";
 import { OpenAIService } from "./OpenAIService";
+import { StorageService } from "./StorageService";
 
 export class CrawlerService {
   private openAIService: OpenAIService;
+  private storageService: StorageService;
 
   constructor() {
     this.openAIService = new OpenAIService();
+    this.storageService = new StorageService();
   }
 
   /**
@@ -26,14 +27,24 @@ export class CrawlerService {
   }
 
   async crawl(urls: string[], topics: string[]): Promise<TopicOutput[]> {
+    // Initialize storage
+    await this.storageService.init();
+
     // Initialize result structure
-    const result: TopicOutput[] = topics.map((topic) => ({
+    let result: TopicOutput[] = topics.map((topic) => ({
       topic,
       papers: [],
     }));
 
+    // Load existing results if any
+    const existingResults = await this.storageService.loadResults();
+    if (existingResults) {
+      result = existingResults;
+    }
+
     // Collect all papers from all URLs
     const allPapers: Paper[] = [];
+    const newPapers: Paper[] = [];
 
     // Crawl each URL
     for (const url of urls) {
@@ -55,37 +66,50 @@ export class CrawlerService {
         }
 
         allPapers.push(...validPapers);
+
+        // Identify new papers that need processing
+        validPapers.forEach((paper) => {
+          if (!this.storageService.isPaperProcessed(paper)) {
+            newPapers.push(paper);
+          } else {
+            // Add cached papers to results
+            const cachedTopics = this.storageService.getCachedTopics(paper);
+            if (cachedTopics) {
+              this.addPaperToResults(paper, cachedTopics, result);
+            }
+          }
+        });
       } catch (error) {
         console.error(`Error crawling ${url}:`, error);
       }
     }
 
-    console.log(`Found ${allPapers.length} valid papers in total`);
-
-    if (allPapers.length === 0) {
-      console.warn("No valid papers found to process");
-      return result;
-    }
-
-    // Process all papers in batch
-    const paperTopicsMap = await this.openAIService.batchProcessPapers(
-      allPapers,
-      topics
+    console.log(
+      `Found ${allPapers.length} papers in total (${newPapers.length} new)`
     );
 
-    // Organize results by topic
-    paperTopicsMap.forEach((relevantTopics, paper) => {
-      if (relevantTopics.length > 0) {
-        relevantTopics.forEach((topic) => {
-          const topicOutput = result.find((t) => t.topic === topic);
-          if (topicOutput) {
-            topicOutput.papers.push(paper);
-          }
-        });
-      }
-    });
+    // Process new papers with immediate updates
+    if (newPapers.length > 0) {
+      await this.openAIService.batchProcessPapers(
+        newPapers,
+        topics,
+        async (paper, relevantTopics) => {
+          // Update cache
+          await this.storageService.addProcessedPaper(paper, relevantTopics);
 
-    // Log summary
+          // Update results
+          this.addPaperToResults(paper, relevantTopics, result);
+
+          // Save current results
+          await this.storageService.saveResults(result);
+
+          // Log progress
+          console.log(`Updated results for paper: ${paper.title}`);
+        }
+      );
+    }
+
+    // Log final summary
     result.forEach((topicOutput) => {
       console.log(
         `Found ${topicOutput.papers.length} papers related to "${topicOutput.topic}"`
@@ -93,5 +117,24 @@ export class CrawlerService {
     });
 
     return result;
+  }
+
+  /**
+   * Helper method to add a paper to results
+   */
+  private addPaperToResults(
+    paper: Paper,
+    relevantTopics: string[],
+    results: TopicOutput[]
+  ): void {
+    relevantTopics.forEach((topic) => {
+      const topicOutput = results.find((t) => t.topic === topic);
+      if (
+        topicOutput &&
+        !topicOutput.papers.some((p) => p.title === paper.title)
+      ) {
+        topicOutput.papers.push(paper);
+      }
+    });
   }
 }
